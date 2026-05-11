@@ -1,0 +1,21 @@
+# Default: let git auto-detect text vs binary, normalize to LF in repo.
+* text=auto eol=lf
+
+# Shell scripts MUST be LF on Linux/macOS, regardless of platform.
+*.sh        text eol=lf
+*.bash      text eol=lf
+
+# PowerShell is fine with either; keep CRLF on Windows.
+*.ps1       text eol=crlf
+
+# Markdown / config: LF for cross-platform consistency.
+*.md        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.json      text eol=lf
+*.toml      text eol=lf
+
+# Binary
+*.png       binary
+*.jpg       binary
+*.zip       binary

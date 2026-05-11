@@ -21,3 +21,7 @@ desktop.ini
 
 # Logs
 *.log
+
+# Local research clones (not part of release)
+.refs/
+
