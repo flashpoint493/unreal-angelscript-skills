@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/flashpoint493/unreal-angelscript-skills/compare/v0.1.0...v0.1.1) (2026-05-11)
+
+
+### Features
+
+* vendor-neutral multi-agent distribution and automated releases ([e0ca4e7](https://github.com/flashpoint493/unreal-angelscript-skills/commit/e0ca4e714252fa405ef19bb61bb4b99f83cf2f42))
+
 ## 0.1.0 (Unreleased)
 
 ### Features
