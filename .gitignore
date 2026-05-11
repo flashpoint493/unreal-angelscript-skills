@@ -1,0 +1,23 @@
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# CodeBuddy / AI assistants local cache
+.codebuddy/
+.claude/
+.cursor/
+
+# Archives that may be generated for skill packaging
+*.zip
+*.tar.gz
+
+# Logs
+*.log
