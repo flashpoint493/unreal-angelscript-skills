@@ -1,0 +1,223 @@
+name: Release
+
+# Build skill release artifacts and publish a GitHub Release.
+#
+# Triggers:
+# - Push a tag like v1.2.3 (recommended: created by release-please workflow)
+# - Manual dispatch with a tag name
+#
+# Artifacts produced:
+# - unreal-angelscript-skill-<version>.zip       Canonical skill (skills/unreal-angelscript/)
+# - unreal-angelscript-multi-agent-<version>.zip Pre-fanned-out copies for every supported agent
+# - SHA256SUMS                                   Checksums for all artifacts
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0). Must already exist or be created by this run."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build release artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve tag and version
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag=${TAG} version=${VERSION}"
+
+      - name: Verify skill source layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f skills/unreal-angelscript/SKILL.md
+          test -d skills/unreal-angelscript/references
+          ref_count=$(find skills/unreal-angelscript/references -name '*.md' | wc -l)
+          echo "Reference docs: ${ref_count}"
+          if [ "${ref_count}" -lt 5 ]; then
+            echo "::error::Skill references look incomplete (${ref_count} files)."
+            exit 1
+          fi
+
+      - name: Stage canonical skill
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          STAGE="dist/stage-canonical/unreal-angelscript"
+          mkdir -p "${STAGE}"
+          cp -R skills/unreal-angelscript/. "${STAGE}/"
+          # Embed metadata
+          printf '%s\n' "${{ steps.meta.outputs.version }}" > "${STAGE}/VERSION"
+
+      - name: Stage multi-agent fan-out
+        shell: bash
+        env:
+          AGENTS: ".codebuddy .claude .cursor .windsurf .cline .roo .trae .kiro .opencode .agents"
+        run: |
+          set -euo pipefail
+          MULTI="dist/stage-multi"
+          mkdir -p "${MULTI}"
+          # Always include the canonical layout too (skills/ at the root)
+          mkdir -p "${MULTI}/skills"
+          cp -R skills/unreal-angelscript "${MULTI}/skills/"
+          # Fan out into every supported AI agent directory
+          for agent in ${AGENTS}; do
+            target="${MULTI}/${agent}/skills"
+            mkdir -p "${target}"
+            cp -R skills/unreal-angelscript "${target}/"
+          done
+          # Drop a small README for the multi-agent bundle
+          cp scripts/templates/multi-agent-INSTALL.md "${MULTI}/INSTALL.md"
+
+      - name: Pack archives
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.meta.outputs.version }}"
+          OUT="dist/out"
+          mkdir -p "${OUT}"
+
+          ( cd dist/stage-canonical && zip -r "../../${OUT}/unreal-angelscript-skill-${VERSION}.zip" . >/dev/null )
+          ( cd dist/stage-multi     && zip -r "../../${OUT}/unreal-angelscript-multi-agent-${VERSION}.zip" . >/dev/null )
+
+          ( cd "${OUT}" && sha256sum *.zip > SHA256SUMS )
+
+          echo "Artifacts:"
+          ls -lh "${OUT}"
+          echo "SHA256SUMS:"
+          cat "${OUT}/SHA256SUMS"
+
+          echo "out_dir=${OUT}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: ${{ steps.pack.outputs.out_dir }}/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout (for release notes)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.tag }}
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: release-artifacts
+
+      - name: Generate release notes body
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.build.outputs.tag }}"
+          VERSION="${{ needs.build.outputs.version }}"
+          {
+            echo "# Unreal AngelScript Skill ${TAG}"
+            echo
+            echo "AI coding skill package for Unreal Engine + AngelScript."
+            echo
+            echo "## Install"
+            echo
+            echo "**Linux / macOS:**"
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash -s -- --version ${VERSION}"
+            echo '```'
+            echo
+            echo "**Windows (PowerShell):**"
+            echo '```powershell'
+            echo "iwr -useb https://raw.githubusercontent.com/${{ github.repository }}/main/install.ps1 | iex"
+            echo '```'
+            echo
+            echo "## Artifacts"
+            echo
+            echo "| File | Purpose |"
+            echo "|------|---------|"
+            echo "| \`unreal-angelscript-skill-${VERSION}.zip\` | Canonical skill — drop \`unreal-angelscript/\` into your agent's \`skills/\` directory |"
+            echo "| \`unreal-angelscript-multi-agent-${VERSION}.zip\` | Pre-fanned-out copies for 10+ AI agents (CodeBuddy, Claude Code, Cursor, Windsurf, Cline, Roo, Trae, Claude, OpenCode, AGENTS.md) |"
+            echo "| \`SHA256SUMS\` | SHA-256 checksums for the two zip files |"
+            if [ -f CHANGELOG.md ]; then
+              echo
+              echo "## Changelog"
+              echo
+              awk -v ver="${VERSION}" '
+                /^## \[?'"${VERSION}"'\]?/ { p=1; print; next }
+                p && /^## / { exit }
+                p { print }
+              ' CHANGELOG.md || true
+            fi
+          } > RELEASE_NOTES.md
+          echo "notes_path=RELEASE_NOTES.md" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.build.outputs.tag }}"
+          REPO="${{ github.repository }}"
+          PRERELEASE_FLAG=""
+          # Mark anything with a hyphen suffix (e.g. v0.1.0-rc.1) as prerelease
+          if [[ "${TAG}" == *-* ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          if gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists, updating notes and uploading assets..."
+            gh release edit "${TAG}" --repo "${REPO}" \
+              --notes-file RELEASE_NOTES.md ${PRERELEASE_FLAG}
+            gh release upload "${TAG}" --repo "${REPO}" --clobber \
+              release-artifacts/*
+          else
+            echo "Creating release ${TAG}..."
+            gh release create "${TAG}" --repo "${REPO}" \
+              --title "Unreal AngelScript Skill ${TAG}" \
+              --notes-file RELEASE_NOTES.md ${PRERELEASE_FLAG} \
+              release-artifacts/*
+          fi

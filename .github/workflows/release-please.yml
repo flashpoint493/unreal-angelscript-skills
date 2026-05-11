@@ -1,0 +1,49 @@
+# Release Please workflow.
+#
+# - Watches commits on `main` for conventional commit prefixes (feat:, fix:, etc.)
+# - Maintains an open "chore: release vX.Y.Z" PR with an updated CHANGELOG
+# - When that PR is merged, release-please creates a GitHub Release + git tag,
+#   which in turn triggers `release.yml` to build and attach skill archives.
+
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # release-please tag creation does NOT trigger downstream workflows
+      # (GITHUB_TOKEN-driven events do not cascade). Dispatch release.yml
+      # explicitly so artifacts are built whenever a release is cut.
+      - name: Trigger Release workflow
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.release.outputs.tag_name }}"
+          echo "Release ${TAG} created. Dispatching release.yml..."
+          gh workflow run release.yml \
+            --repo "${{ github.repository }}" \
+            --field "tag=${TAG}"
